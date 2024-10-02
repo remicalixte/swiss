@@ -22,12 +22,35 @@ const (
 	maxLoadFactor = float32(maxAvgGroupLoad) / float32(groupSize)
 )
 
+type Hasher[K comparable] interface {
+	Hash(K) uint64
+	NewSeed()
+}
+
+type MapHasher[K comparable] struct {
+	maphash.Hasher[K]
+}
+
+func NewMapHasher[K comparable]() *MapHasher[K] {
+	return &MapHasher[K]{
+		Hasher: maphash.NewHasher[K](),
+	}
+}
+
+func (m *MapHasher[K]) Hash(k K) uint64 {
+	return m.Hasher.Hash(k)
+}
+
+func (m *MapHasher[K]) NewSeed() {
+	m.Hasher = maphash.NewSeed(m.Hasher)
+}
+
 // Map is an open-addressing hash map
 // based on Abseil's flat_hash_map.
 type Map[K comparable, V any] struct {
 	ctrl     []metadata
 	groups   []group[K, V]
-	hash     maphash.Hasher[K]
+	hash     Hasher[K]
 	resident uint32
 	dead     uint32
 	limit    uint32
@@ -59,11 +82,15 @@ type h2 int8
 
 // NewMap constructs a Map.
 func NewMap[K comparable, V any](sz uint32) (m *Map[K, V]) {
+	return NewMapWithHasher[K, V](sz, NewMapHasher[K]())
+}
+
+func NewMapWithHasher[K comparable, V any](sz uint32, hasher Hasher[K]) (m *Map[K, V]) {
 	groups := numGroups(sz)
 	m = &Map[K, V]{
 		ctrl:   make([]metadata, groups),
 		groups: make([]group[K, V], groups),
-		hash:   maphash.NewHasher[K](),
+		hash:   hasher,
 		limit:  groups * maxAvgGroupLoad,
 	}
 	for i := range m.ctrl {
@@ -305,7 +332,7 @@ func (m *Map[K, V]) rehash(n uint32) {
 	for i := range m.ctrl {
 		m.ctrl[i] = newEmptyMetadata()
 	}
-	m.hash = maphash.NewSeed(m.hash)
+	m.hash.NewSeed()
 	m.limit = n * maxAvgGroupLoad
 	m.resident, m.dead = 0, 0
 	for g := range ctrl {
